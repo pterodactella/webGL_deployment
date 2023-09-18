@@ -1,0 +1,197 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fluid Simulation - Physical Approach</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+        }
+
+  
+        #control-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            background-color: rgba(255, 255, 255, 0.); /* Optional: semi-transparent background */
+            padding: 10px;
+        }
+    </style>
+    <canvas id="canvas" height="1800" width="1800">
+
+    </canvas>
+</head>
+<body>
+    <div id="control-panel">
+        <input type="color" id="colorPicker" value="#ff0000">
+    </div>
+    <script id="vertexShader" type="x-shader/x-vertex">
+        precision highp float;
+        precision mediump sampler2D;
+        
+        attribute vec2 aPosition;
+        varying vec2 uv, left, right, top, bottom;
+        uniform vec2 texelSize;
+        
+        void main() {
+            // Compute UV coordinates and neighboring texel positions
+            uv = (aPosition + vec2(1.0)) * 0.5;
+            vec2 texelOffsetX = vec2(texelSize.x, 0.0);
+            vec2 texelOffsetY = vec2(0.0, texelSize.y);
+            left = uv - texelOffsetX;
+            right = uv + texelOffsetX;
+            top = uv + texelOffsetY;
+            bottom = uv - texelOffsetY;
+        
+            // Pass the position to the next stage
+            gl_Position = vec4(aPosition, 0.0, 1.0);
+        }
+        
+
+    </script>
+
+    <script id="colorShader" type="x-shader/x-fragment">
+        precision highp float;
+        precision mediump sampler2D;
+        
+        uniform sampler2D uTexture;
+        varying vec2 uv;
+        
+        void main() {
+            vec4 sampledColor = texture2D(uTexture, uv);
+            gl_FragColor = sampledColor;
+        }
+        
+    </script>
+
+    <script id="externalForceShader" type="x-shader/x-fragment">
+        precision highp float;
+        precision mediump sampler2D;
+        
+        uniform sampler2D uTarget;
+        uniform float aspectRatio;
+        uniform vec3 color;
+        uniform vec2 point;
+        uniform float radius;
+        
+        varying vec2 uv;
+        
+        void main() {
+            vec2 displacement = uv - point;
+            displacement.x *= aspectRatio;
+            float distanceSquared = dot(displacement, displacement);
+            vec3 splat = exp(-distanceSquared / radius) * color;
+            vec3 base = texture2D(uTarget, uv).xyz;
+            gl_FragColor = vec4(base + splat, 1.0);
+        }
+        
+    </script>
+
+
+    <script id="advectionShader" type="x-shader/x-fragment">
+        // Introduce the advection fragment shader
+        precision highp float;
+        precision mediump sampler2D;
+        
+        varying vec2 uv;
+        uniform sampler2D uVelocity;
+        uniform sampler2D uSource;
+        uniform vec2 texelSize;
+        uniform float dt;
+        uniform float dissipation;
+        
+        void main() {
+            // Calculate the coordinate after advection based on the velocity field
+            vec2 velocity = texture2D(uVelocity, uv).xy;
+            vec2 coord = uv - dt * velocity * texelSize;
+            vec4 sourceValue = texture2D(uSource, coord);
+            gl_FragColor = dissipation * sourceValue;
+            gl_FragColor.a = 1.0;
+        }
+        
+    </script>
+
+    <script id="divergenceShader" type="x-shader/x-fragment">
+        // The divergence shader
+        precision highp float;
+        precision mediump sampler2D;
+        
+        varying vec2 uv, left, right, top, bottom;
+        uniform sampler2D uVelocity;
+        
+        vec2 sampleVelocity(in vec2 uv) {
+            vec2 clampedUV = clamp(uv, 0.0, 1.0);
+            vec2 multiplier = sign(1.0 - 2.0 * abs(clampedUV - uv));
+            return multiplier * texture2D(uVelocity, clampedUV).xy;
+        }
+        
+        void main() {
+            float L = sampleVelocity(left).x;
+            float R = sampleVelocity(right).x;
+            float T = sampleVelocity(top).y;
+            float B = sampleVelocity(bottom).y;
+            float divergence = 0.5 * (R - L + T - B);
+            gl_FragColor = vec4(divergence, 0.0, 0.0, 1.0);
+        }
+        
+    </script>
+
+
+    <script id="pressureShader" type="x-shader/x-fragment">
+        // The pressure shader
+        precision highp float;
+        precision mediump sampler2D;
+        
+        varying vec2 uv, left, right, top, bottom;
+        uniform sampler2D uPressure;
+        uniform sampler2D uDivergence;
+        
+        void main() {
+            float L = texture2D(uPressure, clamp(left, 0.0, 1.0)).x;
+            float R = texture2D(uPressure, clamp(right, 0.0, 1.0)).x;
+            float T = texture2D(uPressure, clamp(top, 0.0, 1.0)).x;
+            float B = texture2D(uPressure, clamp(bottom, 0.0, 1.0)).x;
+            float C = texture2D(uPressure, uv).x;
+            float divergence = texture2D(uDivergence, uv).x;
+            float pressure = (L + R + B + T - divergence) * 0.25;
+            gl_FragColor = vec4(pressure, 0.0, 0.0, 1.0);
+        }
+        
+    </script>
+
+    <script id="gradientShader" type="x-shader/x-fragment">
+        // The gradient shader
+        precision highp float;
+        precision mediump sampler2D;
+        
+        varying vec2 uv, left, right, top, bottom;
+        uniform sampler2D uPressure;
+        uniform sampler2D uVelocity;
+        
+        void main() {
+            float L = texture2D(uPressure, clamp(left, 0.0, 1.0)).x;
+            float R = texture2D(uPressure, clamp(right, 0.0, 1.0)).x;
+            float T = texture2D(uPressure, clamp(top, 0.0, 1.0)).x;
+            float B = texture2D(uPressure, clamp(bottom, 0.0, 1.0)).x;
+        
+            // Calculate the gradient of the pressure field
+            vec2 gradient = vec2(R - L, T - B);
+        
+            // Retrieve the current velocity and subtract the gradient
+            vec2 velocity = texture2D(uVelocity, uv).xy - gradient;
+        
+            gl_FragColor = vec4(velocity, 0.0, 1.0);
+        }
+        
+    </script>
+    <script src="mainPhysicalCode.js" type="module"></script>
+    
+</body>
+</html>
+
